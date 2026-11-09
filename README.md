@@ -23,9 +23,18 @@ identical to a direct USB connection.
 
 ## Features
 
+- **WiFi setup portal**: on first boot (or if the saved network is unreachable)
+  the ESP opens an AP (`ESP32-PrintServer-XXXXXX`) with a web page at
+  192.168.4.1 to scan networks and enter the password — no reflashing needed.
+  Credentials are stored in NVS. (`docs/PROVISIONING.md`)
 - Raw TCP printing on port **9100** (Windows Standard TCP/IP port, Linux `socket://`)
 - Minimal **LPD (RFC 1179)** server on port **515** (macOS/Linux LPD)
-- USB host driver for USB printer-class devices (VID filter: Epson `0x04B8` by default)
+- **USB/IP server (TCP 3240)**: exports the printer as a remote USB device, so on
+  Linux/Windows it can be attached as if locally plugged in — **ink levels,
+  Status Monitor, nozzle check, head cleaning, all bidirectional functions work**.
+  (`docs/BIDIRECTIONAL.md`)
+- USB host driver for USB printer-class devices (VID filter: Epson `0x04B8`
+  by default; set `APP_PRINTER_VID=0` for **any** USB printer)
 - PSRAM ring-buffer queue with TCP flow control — jobs of any size stream through
 - DHCP or static IP (configurable in menuconfig)
 
@@ -35,6 +44,8 @@ identical to a direct USB connection.
 firmware/          ESP-IDF v5.3 project (builds clean for esp32s3)
 docs/ARCHITECTURE.md   how the data path works and why quality is preserved
 docs/HARDWARE.md       wiring, 5V VBUS feed, cable notes
+docs/PROVISIONING.md   WiFi setup portal (AP + web page, NVS storage)
+docs/BIDIRECTIONAL.md  USB/IP: full bidirectional USB (ink levels, status, cleaning)
 docs/SETUP_WINDOWS.md  add the printer in Windows keeping the Epson driver
 docs/SETUP_MACOS.md    add the printer in macOS keeping the Epson driver
 docs/SETUP_LINUX.md    CUPS setup on Linux keeping the Epson driver
@@ -54,10 +65,12 @@ Watch the log for `got IP: ...` and `printer ready: ...`, then configure your OS
 
 ## Known limitations
 
-- **Bidirectional printer status does not pass through**: Epson Status Monitor /
-  ink-level checks on the PC will not see the printer, because raw pass-through
-  carries no status channel back. All *print* settings work; check ink on the
-  printer itself.
-- One print job is accepted at a time (sequential connections are queued by the OS).
+- Raw mode (9100/515) is one-way: use USB/IP mode for bidirectional status.
+  On macOS (no USB/IP client) only printing works, not ink-level reporting.
+- One raw print job is accepted at a time; one USB/IP client at a time.
 - The L1800 is a USB Full-Speed device (~12 Mbit/s effective) — fine for this
   printer, which is the bottleneck anyway.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

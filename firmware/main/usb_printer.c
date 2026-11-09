@@ -21,9 +21,9 @@ static const char *TAG = "usb_printer";
 #define CTRL_XFER_SIZE          (sizeof(usb_setup_packet_t) + 256)
 
 #define PRINTER_REQ_GET_DEVICE_ID   0x00
-#define PRINTER_REQ_PORT_STATUS     0x01
-#define PRINTER_REQ_SOFT_RESET      0x02
 #define PRINTER_REQ_IN              0xA1
+
+#define USBIP_SPEED_FULL        2
 
 typedef struct {
     usb_host_client_handle_t client;
@@ -33,7 +33,10 @@ typedef struct {
     uint8_t ep_out;
     uint8_t ep_in;
     bool connected;
+    bool exclusive;
+    usb_printer_ids_t ids;
     SemaphoreHandle_t xfer_done;
+    SemaphoreHandle_t mux;
     usb_transfer_t *bulk_xfer;
     usb_transfer_t *ctrl_xfer;
 } printer_state_t;
@@ -79,28 +82,50 @@ static esp_err_t control_request(uint8_t bRequest, uint16_t wValue, uint16_t wIn
     return ESP_OK;
 }
 
-static esp_err_t bulk_write(const uint8_t *data, size_t len)
+static int status_to_errno(usb_transfer_status_t status)
 {
-    usb_transfer_t *xfer = s_printer.bulk_xfer;
-    memcpy(xfer->data_buffer, data, len);
+    switch (status) {
+    case USB_TRANSFER_STATUS_COMPLETED:
+        return 0;
+    case USB_TRANSFER_STATUS_STALL:
+        return -32;
+    case USB_TRANSFER_STATUS_NO_DEVICE:
+        return -19;
+    case USB_TRANSFER_STATUS_TIMED_OUT:
+        return -110;
+    default:
+        return -5;
+    }
+}
+
+esp_err_t usb_printer_xfer(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t num_bytes,
+                           int *actual, int *status)
+{
+    usb_transfer_t *xfer = control ? s_printer.ctrl_xfer : s_printer.bulk_xfer;
+    if (control) {
+        memcpy(xfer->data_buffer, buf, num_bytes);
+    } else {
+        memcpy(xfer->data_buffer, buf, num_bytes);
+    }
     xfer->device_handle = s_printer.dev_hdl;
-    xfer->bEndpointAddress = s_printer.ep_out;
-    xfer->num_bytes = len;
+    xfer->bEndpointAddress = control ? 0 : ep_addr;
+    xfer->num_bytes = num_bytes;
     xfer->flags = 0;
     xfer->callback = transfer_done_cb;
     xfer->context = NULL;
 
-    esp_err_t err = usb_host_transfer_submit(xfer);
+    esp_err_t err = control ? usb_host_transfer_submit_control(s_printer.client, xfer)
+                            : usb_host_transfer_submit(xfer);
     if (err != ESP_OK) {
         return err;
     }
     if (xSemaphoreTake(s_printer.xfer_done, pdMS_TO_TICKS(30000)) != pdTRUE) {
+        *status = -110;
+        *actual = 0;
         return ESP_ERR_TIMEOUT;
     }
-    if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
-        ESP_LOGW(TAG, "bulk OUT status=%d, actual=%d", xfer->status, xfer->actual_num_bytes);
-        return ESP_FAIL;
-    }
+    *actual = xfer->actual_num_bytes;
+    *status = status_to_errno(xfer->status);
     return ESP_OK;
 }
 
@@ -170,6 +195,19 @@ static void printer_connect(uint8_t dev_addr)
         goto fail;
     }
 
+    usb_device_info_t dev_info;
+    if (usb_host_device_info(s_printer.dev_hdl, &dev_info) == ESP_OK) {
+        s_printer.ids.speed = (dev_info.speed == USB_SPEED_FULL) ? USBIP_SPEED_FULL : dev_info.speed;
+    }
+    s_printer.ids.vid = dev_desc->idVendor;
+    s_printer.ids.pid = dev_desc->idProduct;
+    s_printer.ids.bcd_device = dev_desc->bcdDevice;
+    s_printer.ids.dev_class = dev_desc->bDeviceClass;
+    s_printer.ids.dev_subclass = dev_desc->bDeviceSubClass;
+    s_printer.ids.dev_protocol = dev_desc->bDeviceProtocol;
+    s_printer.ids.config_value = dev_info.bConfigurationValue;
+    s_printer.ids.num_configs = dev_desc->bNumConfigurations;
+
     err = find_printer_interface(s_printer.dev_hdl, &s_printer.intf_num, &s_printer.ep_out, &s_printer.ep_in);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "no USB printer-class interface found");
@@ -179,6 +217,11 @@ static void printer_connect(uint8_t dev_addr)
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "interface claim failed: %s", esp_err_to_name(err));
         goto fail;
+    }
+
+    const usb_config_desc_t *cfg_desc;
+    if (usb_host_get_active_config_descriptor(s_printer.dev_hdl, &cfg_desc) == ESP_OK) {
+        s_printer.ids.num_interfaces = cfg_desc->bNumInterfaces;
     }
 
     uint8_t dev_id[256] = {0};
@@ -256,26 +299,52 @@ static void usb_printer_task(void *arg)
     ESP_ERROR_CHECK(usb_host_transfer_alloc(XFER_BUF_SIZE, 0, &s_printer.bulk_xfer));
     ESP_ERROR_CHECK(usb_host_transfer_alloc(CTRL_XFER_SIZE, 0, &s_printer.ctrl_xfer));
     s_printer.xfer_done = xSemaphoreCreateBinary();
+    s_printer.mux = xSemaphoreCreateMutex();
 
     ESP_LOGI(TAG, "USB host printer driver running");
 
     while (1) {
+        xSemaphoreTake(s_printer.mux, portMAX_DELAY);
         usb_host_client_handle_events(s_printer.client, pdMS_TO_TICKS(100));
-        if (s_printer.connected && job_queue_available() > 0) {
+        if (s_printer.connected && !s_printer.exclusive && job_queue_available() > 0) {
             size_t n = job_queue_read(xfer_buf, XFER_BUF_SIZE);
-            if (n > 0 && bulk_write(xfer_buf, n) != ESP_OK) {
-                ESP_LOGW(TAG, "write failed, clearing endpoint");
-                usb_host_endpoint_halt(s_printer.dev_hdl, s_printer.ep_out);
-                usb_host_endpoint_clear(s_printer.dev_hdl, s_printer.ep_out);
-                vTaskDelay(pdMS_TO_TICKS(500));
+            if (n > 0) {
+                int actual, status;
+                if (usb_printer_xfer(false, s_printer.ep_out, xfer_buf, n, &actual, &status) != ESP_OK
+                        || status != 0) {
+                    ESP_LOGW(TAG, "raw write failed (status=%d), clearing endpoint", status);
+                    usb_host_endpoint_halt(s_printer.dev_hdl, s_printer.ep_out);
+                    usb_host_endpoint_clear(s_printer.dev_hdl, s_printer.ep_out);
+                    xSemaphoreGive(s_printer.mux);
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                    continue;
+                }
             }
         }
+        xSemaphoreGive(s_printer.mux);
     }
 }
 
 bool usb_printer_is_ready(void)
 {
     return s_printer.connected;
+}
+
+void usb_printer_get_ids(usb_printer_ids_t *ids)
+{
+    xSemaphoreTake(s_printer.mux, portMAX_DELAY);
+    *ids = s_printer.ids;
+    xSemaphoreGive(s_printer.mux);
+}
+
+void usb_printer_set_exclusive(bool on)
+{
+    s_printer.exclusive = on;
+}
+
+SemaphoreHandle_t usb_printer_lock(void)
+{
+    return s_printer.mux;
 }
 
 void usb_printer_start(void)

@@ -5,6 +5,7 @@
 #include "job_queue.h"
 #include "usb_printer.h"
 #include "print_server.h"
+#include "usbip_server.h"
 
 static const char *TAG = "main";
 
@@ -23,6 +24,10 @@ void app_main(void)
     ESP_ERROR_CHECK(wifi_sta_start());
     usb_printer_start();
     print_server_start();
+    usbip_server_start();
 
     ESP_LOGI(TAG, "ready: raw TCP %d, LPD %d", CONFIG_APP_RAW_PORT, CONFIG_APP_LPD_PORT);
+#ifdef CONFIG_APP_ENABLE_USBIP
+    ESP_LOGI(TAG, "USB/IP (bidirectional) on TCP %d", CONFIG_APP_USBIP_PORT);
+#endif
 }

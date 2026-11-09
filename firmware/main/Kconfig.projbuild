@@ -68,3 +68,40 @@ menu "Print server"
         default 0x0000
 
 endmenu
+
+menu "WiFi provisioning portal"
+
+    config APP_ENABLE_PORTAL
+        bool "Start a setup portal (AP + web page) when WiFi is not configured"
+        default y
+        help
+            If no credentials are stored (and none are set in menuconfig),
+            or connecting fails, the ESP opens its own AP named
+            "<prefix>-XXXXXX" with a web page at 192.168.4.1 to pick a
+            network and enter the password. Credentials are saved to NVS.
+
+    config APP_PORTAL_AP_PREFIX
+        string "Portal AP name prefix"
+        default "ESP32-PrintServer"
+        depends on APP_ENABLE_PORTAL
+
+endmenu
+
+menu "USB/IP (full bidirectional USB)"
+
+    config APP_ENABLE_USBIP
+        bool "Run a USB/IP server so the printer can be attached as a local USB device"
+        default y
+        help
+            Exports the printer over USB/IP (TCP 3240). On Linux/Windows,
+            attaching it makes the OS see the printer as physically connected
+            by USB, so Epson Status Monitor, ink levels, head cleaning and all
+            other bidirectional functions work. Raw printing on 9100/515 is
+            paused while a USB/IP client is attached.
+
+    config APP_USBIP_PORT
+        int "USB/IP port"
+        default 3240
+        depends on APP_ENABLE_USBIP
+
+endmenu
