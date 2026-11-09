@@ -1,0 +1,70 @@
+menu "WiFi Station"
+
+    config APP_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+        help
+            SSID of the WiFi network the print server joins.
+
+    config APP_WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+        help
+            WPA/WPA2 passphrase of the WiFi network.
+
+    config APP_STATIC_IP
+        bool "Use static IP instead of DHCP"
+        default n
+
+    config APP_STATIC_IP_ADDR
+        string "Static IP address"
+        default "192.168.1.200"
+        depends on APP_STATIC_IP
+
+    config APP_STATIC_GW
+        string "Static gateway"
+        default "192.168.1.1"
+        depends on APP_STATIC_IP
+
+    config APP_STATIC_NETMASK
+        string "Static netmask"
+        default "255.255.255.0"
+        depends on APP_STATIC_IP
+
+endmenu
+
+menu "Print server"
+
+    config APP_RAW_PORT
+        int "Raw TCP (JetDirect) port"
+        default 9100
+        help
+            TCP port for raw print data, used by Windows Standard TCP/IP
+            ports and Linux socket:// URIs.
+
+    config APP_LPD_PORT
+        int "LPD (RFC 1179) port"
+        default 515
+        help
+            Line Printer Daemon port, used by macOS/Linux LPD printing.
+
+    config APP_QUEUE_SIZE_KB
+        int "Print queue size (KB, in PSRAM)"
+        default 1024
+        range 64 7168
+        help
+            Size of the PSRAM ring buffer that smooths bursts between the
+            network and the USB printer. Flow control throttles the sender,
+            so print jobs of any size stream through.
+
+    config APP_PRINTER_VID
+        hex "Accepted USB vendor ID (0 = any)"
+        default 0x04B8
+        help
+            0x04B8 is Epson. Set to 0 to accept any USB printer-class device.
+
+    config APP_PRINTER_PID
+        hex "Accepted USB product ID (0 = any)"
+        default 0x0000
+
+endmenu
