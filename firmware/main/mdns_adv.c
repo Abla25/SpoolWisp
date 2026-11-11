@@ -43,15 +43,11 @@ static void update_printer_txt(const char *mfg, const char *mdl)
         char product[96];
         snprintf(product, sizeof(product), "(%s)", mdl);
         mdns_service_txt_item_set(SVC_RAW, PROTO, "ty", mdl);
-        mdns_service_txt_item_set(SVC_LPD, PROTO, "ty", mdl);
         mdns_service_txt_item_set(SVC_RAW, PROTO, "usb_MDL", mdl);
-        mdns_service_txt_item_set(SVC_LPD, PROTO, "usb_MDL", mdl);
         mdns_service_txt_item_set(SVC_RAW, PROTO, "product", product);
-        mdns_service_txt_item_set(SVC_LPD, PROTO, "product", product);
     }
     if (mfg != NULL && mfg[0] != '\0') {
         mdns_service_txt_item_set(SVC_RAW, PROTO, "usb_MFG", mfg);
-        mdns_service_txt_item_set(SVC_LPD, PROTO, "usb_MFG", mfg);
     }
 }
 
@@ -116,9 +112,8 @@ void mdns_adv_set_printer(const char *manufacturer, const char *model)
     }
 
     esp_err_t err_raw = mdns_service_instance_name_set(SVC_RAW, PROTO, name);
-    esp_err_t err_lpd = mdns_service_instance_name_set(SVC_LPD, PROTO, name);
-    if (err_raw != ESP_OK && err_lpd != ESP_OK) {
-        ESP_LOGW(TAG, "cannot rename Bonjour services to \"%s\": %s",
+    if (err_raw != ESP_OK) {
+        ESP_LOGW(TAG, "cannot rename Bonjour service to \"%s\": %s",
                  name, esp_err_to_name(err_raw));
         return;
     }
@@ -140,19 +135,14 @@ void mdns_adv_clear_printer(void)
     }
 
     esp_err_t err_raw = mdns_service_instance_name_set(SVC_RAW, PROTO, "SpoolWisp [WIFI]");
-    esp_err_t err_lpd = mdns_service_instance_name_set(SVC_LPD, PROTO, "SpoolWisp [WIFI]");
-    if (err_raw != ESP_OK && err_lpd != ESP_OK) {
+    if (err_raw != ESP_OK) {
         return;
     }
     strlcpy(s_instance, "SpoolWisp [WIFI]", sizeof(s_instance));
 
     mdns_service_txt_item_remove(SVC_RAW, PROTO, "usb_MFG");
-    mdns_service_txt_item_remove(SVC_LPD, PROTO, "usb_MFG");
     mdns_service_txt_item_remove(SVC_RAW, PROTO, "usb_MDL");
-    mdns_service_txt_item_remove(SVC_LPD, PROTO, "usb_MDL");
     mdns_service_txt_item_remove(SVC_RAW, PROTO, "product");
-    mdns_service_txt_item_remove(SVC_LPD, PROTO, "product");
     mdns_service_txt_item_set(SVC_RAW, PROTO, "ty", "SpoolWisp USB print server");
-    mdns_service_txt_item_set(SVC_LPD, PROTO, "ty", "SpoolWisp USB print server");
     ESP_LOGI(TAG, "printer unplugged, Bonjour name back to \"SpoolWisp\"");
 }

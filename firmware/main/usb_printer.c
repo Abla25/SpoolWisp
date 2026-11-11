@@ -123,8 +123,8 @@ static int status_to_errno(usb_transfer_status_t status)
     }
 }
 
-esp_err_t usb_printer_xfer(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t num_bytes,
-                           int *actual, int *status)
+static esp_err_t xfer_impl(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t num_bytes,
+                           int *actual, int *status, TickType_t timeout_ticks)
 {
     usb_transfer_t *xfer = control ? s_printer.ctrl_xfer : s_printer.bulk_xfer;
     if (control && num_bytes > CTRL_XFER_SIZE) {
@@ -149,7 +149,7 @@ esp_err_t usb_printer_xfer(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t
     if (err != ESP_OK) {
         return err;
     }
-    if (wait_transfer(pdMS_TO_TICKS(30000)) != ESP_OK) {
+    if (wait_transfer(timeout_ticks) != ESP_OK) {
         *status = -110;
         *actual = 0;
         return ESP_ERR_TIMEOUT;
@@ -172,6 +172,19 @@ esp_err_t usb_printer_xfer(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t
     *actual = xfer->actual_num_bytes;
     *status = status_to_errno(xfer->status);
     return ESP_OK;
+}
+
+esp_err_t usb_printer_xfer(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t num_bytes,
+                           int *actual, int *status)
+{
+    return xfer_impl(control, ep_addr, buf, num_bytes, actual, status, pdMS_TO_TICKS(30000));
+}
+
+esp_err_t usb_printer_xfer_timeout(bool control, uint8_t ep_addr, uint8_t *buf,
+                                   uint32_t num_bytes, int *actual, int *status,
+                                   TickType_t timeout_ticks)
+{
+    return xfer_impl(control, ep_addr, buf, num_bytes, actual, status, timeout_ticks);
 }
 
 static esp_err_t find_printer_interface(usb_device_handle_t dev_hdl, uint8_t *intf_num,
@@ -426,6 +439,20 @@ void usb_printer_get_ids(usb_printer_ids_t *ids)
     xSemaphoreTake(s_printer.mux, portMAX_DELAY);
     *ids = s_printer.ids;
     xSemaphoreGive(s_printer.mux);
+}
+
+esp_err_t usb_printer_get_endpoints(uint8_t *ep_out, uint8_t *ep_in)
+{
+    if (!s_printer.connected || s_printer.dev_hdl == NULL) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (ep_out != NULL) {
+        *ep_out = s_printer.ep_out;
+    }
+    if (ep_in != NULL) {
+        *ep_in = s_printer.ep_in;
+    }
+    return ESP_OK;
 }
 
 void usb_printer_set_exclusive(bool on)

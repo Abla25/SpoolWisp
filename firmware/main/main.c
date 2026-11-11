@@ -9,6 +9,7 @@
 #include "print_server.h"
 #include "usbip_server.h"
 #include "mdns_adv.h"
+#include "ink_accountant.h"
 
 static const char *TAG = "main";
 
@@ -33,6 +34,7 @@ void app_main(void)
      * the very first Bonjour announcement already carries the real model. */
     vTaskDelay(pdMS_TO_TICKS(1200));
     mdns_adv_start();
+    ink_accountant_start();
 
     ESP_LOGI(TAG, "ready: raw TCP %d, LPD %d", CONFIG_APP_RAW_PORT, CONFIG_APP_LPD_PORT);
 #ifdef CONFIG_APP_ENABLE_USBIP

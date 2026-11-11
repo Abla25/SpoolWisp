@@ -7,6 +7,7 @@ idf_component_register(SRCS
     "usbip_server.c"
     "print_server.c"
     "mdns_adv.c"
+    "ink_accountant.c"
     INCLUDE_DIRS "."
     REQUIRES esp_wifi esp_netif esp_event nvs_flash usb lwip
 )

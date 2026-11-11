@@ -1,6 +1,7 @@
 #include "print_server.h"
 #include "job_queue.h"
 #include "usb_printer.h"
+#include "ink_accountant.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -122,6 +123,7 @@ static void raw_session(int conn)
     }
     ESP_LOGI(TAG, "raw client connected (port %d)", CONFIG_APP_RAW_PORT);
     bool pjl_mode = false;
+    size_t job_bytes = 0;
     int r;
     while ((r = recv(conn, buf, RECV_BUF_SIZE, 0)) > 0) {
         if (pjl_is_query(buf, (size_t)r)) {
@@ -133,9 +135,13 @@ static void raw_session(int conn)
         /* A non-PJL chunk means this connection carries print data. */
         pjl_mode = false;
         job_queue_write(buf, (size_t)r);
+        job_bytes += (size_t)r;
     }
     free(buf);
     close(conn);
+    if (job_bytes > 0) {
+        ink_accountant_note_job(job_bytes);
+    }
     ESP_LOGI(TAG, "raw client disconnected, job flushed to queue");
 }
 
@@ -224,9 +230,12 @@ static void lpd_ack(int conn)
     send(conn, &zero, 1, 0);
 }
 
+static size_t s_lpd_job_bytes;
+
 static void lpd_receive_job(int conn)
 {
     char line[128];
+    s_lpd_job_bytes = 0;
     if (lpd_read_line(conn, line, sizeof(line)) < 0) {
         return;
     }
@@ -268,6 +277,7 @@ static void lpd_receive_job(int conn)
                         return;
                     }
                     job_queue_write(buf, chunk);
+                    s_lpd_job_bytes += chunk;
                     left -= chunk;
                 }
                 ESP_LOGI(TAG, "LPD data file (%ld bytes) queued", size);
@@ -299,6 +309,9 @@ static void lpd_session(int conn)
         break;
     case 0x02:
         lpd_receive_job(conn);
+        if (s_lpd_job_bytes > 0) {
+            ink_accountant_note_job(s_lpd_job_bytes);
+        }
         break;
     case 0x03:
     case 0x04:

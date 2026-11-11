@@ -42,6 +42,10 @@ identical to a direct USB connection.
   model read from its USB IEEE-1284 ID (e.g. `Epson L1800 Series`), and the
   host name is always `spoolwisp.local`, so DHCP changes do not break the
   queue.
+- **Ink Accountant**: read-only monitoring page + JSON API for Home Assistant
+  (waste ink pad counters, total pages/passes, cleaning counters, configurable
+  EUR/100 ml ink prices and estimated job/month cost). It never writes to the
+  printer; see `docs/INK_ACCOUNTANT.md` for what is real vs estimated.
 - USB host driver for USB printer-class devices (VID filter: Epson `0x04B8`
   by default; set `APP_PRINTER_VID=0` for **any** USB printer)
 - PSRAM ring-buffer queue with TCP flow control — jobs of any size stream through

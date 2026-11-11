@@ -29,5 +29,13 @@ void usb_printer_set_exclusive(bool on);
 
 SemaphoreHandle_t usb_printer_lock(void);
 
+/* Bulk endpoints currently used by the printer interface. Returns
+ * ESP_ERR_INVALID_STATE when no printer is connected. */
+esp_err_t usb_printer_get_endpoints(uint8_t *ep_out, uint8_t *ep_in);
+
 esp_err_t usb_printer_xfer(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t num_bytes,
                            int *actual, int *status);
+
+esp_err_t usb_printer_xfer_timeout(bool control, uint8_t ep_addr, uint8_t *buf,
+                                   uint32_t num_bytes, int *actual, int *status,
+                                   TickType_t timeout_ticks);
