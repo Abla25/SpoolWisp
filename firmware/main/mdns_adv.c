@@ -16,6 +16,23 @@ static const char *TAG = "mdns";
 
 static bool s_started;
 static char s_instance[80] = "SpoolWisp";
+static char s_pending_name[80];
+static char s_pending_mfg[64];
+static char s_pending_mdl[64];
+
+static bool build_printer_name(const char *mfg, const char *mdl, char *out, size_t out_len)
+{
+    if (mfg != NULL && mfg[0] != '\0' && mdl != NULL && mdl[0] != '\0') {
+        snprintf(out, out_len, "%s %s", mfg, mdl);
+    } else if (mdl != NULL && mdl[0] != '\0') {
+        snprintf(out, out_len, "%s", mdl);
+    } else if (mfg != NULL && mfg[0] != '\0') {
+        snprintf(out, out_len, "%s", mfg);
+    } else {
+        return false;
+    }
+    return true;
+}
 
 /* CUPS uses usb_MFG/usb_MDL to build the IEEE-1284 device ID and can then
  * preselect the matching driver; ty is what humans see as the model. */
@@ -47,7 +64,8 @@ void mdns_adv_start(void)
     if ((err = mdns_hostname_set("spoolwisp")) != ESP_OK) {
         ESP_LOGW(TAG, "mdns_hostname_set: %s", esp_err_to_name(err));
     }
-    mdns_instance_name_set("SpoolWisp");
+    const char *instance = s_pending_name[0] != '\0' ? s_pending_name : "SpoolWisp";
+    mdns_instance_name_set(instance);
 
     static mdns_txt_item_t raw_txt[] = {
         { "txtvers", "1" },
@@ -56,7 +74,7 @@ void mdns_adv_start(void)
         { "ty", "SpoolWisp USB print server" },
         { "note", "USB printer over ESP32-S3" },
     };
-    err = mdns_service_add("SpoolWisp", SVC_RAW, PROTO, CONFIG_APP_RAW_PORT,
+    err = mdns_service_add(instance, SVC_RAW, PROTO, CONFIG_APP_RAW_PORT,
                            raw_txt, sizeof(raw_txt) / sizeof(raw_txt[0]));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "mdns raw service add failed: %s", esp_err_to_name(err));
@@ -69,33 +87,35 @@ void mdns_adv_start(void)
         { "ty", "SpoolWisp USB print server" },
         { "note", "USB printer over ESP32-S3" },
     };
-    err = mdns_service_add("SpoolWisp", SVC_LPD, PROTO, CONFIG_APP_LPD_PORT,
+    err = mdns_service_add(instance, SVC_LPD, PROTO, CONFIG_APP_LPD_PORT,
                            lpd_txt, sizeof(lpd_txt) / sizeof(lpd_txt[0]));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "mdns LPD service add failed: %s", esp_err_to_name(err));
     }
 
+    strlcpy(s_instance, instance, sizeof(s_instance));
     s_started = true;
-    ESP_LOGI(TAG, "Bonjour: spoolwisp.local | raw _pdl-datastream._tcp:%d | LPD _printer._tcp:%d",
-             CONFIG_APP_RAW_PORT, CONFIG_APP_LPD_PORT);
+    if (s_pending_name[0] != '\0') {
+        update_printer_txt(s_pending_mfg, s_pending_mdl);
+    }
+    ESP_LOGI(TAG, "Bonjour: spoolwisp.local | \"%s\" raw:%d lpd:%d",
+             s_instance, CONFIG_APP_RAW_PORT, CONFIG_APP_LPD_PORT);
 }
 
 void mdns_adv_set_printer(const char *manufacturer, const char *model)
 {
-    if (!s_started) {
-        ESP_LOGW(TAG, "printer detected but mDNS is not running (no IP yet)");
+    char name[80];
+    if (!build_printer_name(manufacturer, model, name, sizeof(name))) {
         return;
     }
 
-    char name[80];
-    if (manufacturer != NULL && manufacturer[0] != '\0' &&
-        model != NULL && model[0] != '\0') {
-        snprintf(name, sizeof(name), "%s %s", manufacturer, model);
-    } else if (model != NULL && model[0] != '\0') {
-        snprintf(name, sizeof(name), "%s", model);
-    } else if (manufacturer != NULL && manufacturer[0] != '\0') {
-        snprintf(name, sizeof(name), "%s", manufacturer);
-    } else {
+    if (!s_started) {
+        /* Printer already attached at boot: remember it and use the real name
+         * for the very first announcement instead of "SpoolWisp". */
+        strlcpy(s_pending_name, name, sizeof(s_pending_name));
+        strlcpy(s_pending_mfg, manufacturer != NULL ? manufacturer : "", sizeof(s_pending_mfg));
+        strlcpy(s_pending_mdl, model != NULL ? model : "", sizeof(s_pending_mdl));
+        ESP_LOGI(TAG, "printer seen before mDNS start, will advertise \"%s\"", name);
         return;
     }
 
@@ -120,6 +140,9 @@ void mdns_adv_set_printer(const char *manufacturer, const char *model)
 
 void mdns_adv_clear_printer(void)
 {
+    s_pending_name[0] = '\0';
+    s_pending_mfg[0] = '\0';
+    s_pending_mdl[0] = '\0';
     if (!s_started || strcmp(s_instance, "SpoolWisp") == 0) {
         return;
     }

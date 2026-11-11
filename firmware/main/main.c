@@ -1,3 +1,5 @@
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "nvs_flash.h"
 
@@ -23,10 +25,14 @@ void app_main(void)
 
     job_queue_init();
     ESP_ERROR_CHECK(wifi_sta_start());
-    mdns_adv_start();
     usb_printer_start();
     print_server_start();
     usbip_server_start();
+
+    /* Give the USB host a moment to enumerate an already-attached printer so
+     * the very first Bonjour announcement already carries the real model. */
+    vTaskDelay(pdMS_TO_TICKS(1200));
+    mdns_adv_start();
 
     ESP_LOGI(TAG, "ready: raw TCP %d, LPD %d", CONFIG_APP_RAW_PORT, CONFIG_APP_LPD_PORT);
 #ifdef CONFIG_APP_ENABLE_USBIP

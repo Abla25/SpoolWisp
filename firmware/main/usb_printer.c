@@ -36,6 +36,10 @@ typedef struct {
     uint8_t ep_in;
     bool connected;
     bool exclusive;
+    bool pending_new;
+    bool pending_gone;
+    uint8_t pending_dev_addr;
+    usb_device_handle_t pending_gone_hdl;
     usb_printer_ids_t ids;
     SemaphoreHandle_t xfer_done;
     SemaphoreHandle_t mux;
@@ -50,6 +54,21 @@ static void transfer_done_cb(usb_transfer_t *transfer)
     xSemaphoreGive(s_printer.xfer_done);
 }
 
+/* Transfer completions are only delivered from usb_host_client_handle_events(),
+ * so a blocking wait must keep pumping that function, otherwise the completion
+ * never reaches the callback and the wait always times out. */
+static esp_err_t wait_transfer(TickType_t timeout_ticks)
+{
+    TickType_t start = xTaskGetTickCount();
+    do {
+        if (xSemaphoreTake(s_printer.xfer_done, 0) == pdTRUE) {
+            return ESP_OK;
+        }
+        usb_host_client_handle_events(s_printer.client, pdMS_TO_TICKS(1));
+    } while ((xTaskGetTickCount() - start) < timeout_ticks);
+    return ESP_ERR_TIMEOUT;
+}
+
 static esp_err_t control_request(uint8_t bRequest, uint16_t wValue, uint16_t wIndex,
                                  uint16_t wLength, uint8_t *data_out)
 {
@@ -60,16 +79,20 @@ static esp_err_t control_request(uint8_t bRequest, uint16_t wValue, uint16_t wIn
     setup->wValue = wValue;
     setup->wIndex = wIndex;
     setup->wLength = wLength;
+    xfer->device_handle = s_printer.dev_hdl;
     xfer->num_bytes = sizeof(usb_setup_packet_t) + wLength;
     xfer->bEndpointAddress = 0;
     xfer->callback = transfer_done_cb;
     xfer->context = NULL;
 
+    while (xSemaphoreTake(s_printer.xfer_done, 0) == pdTRUE) {
+        /* drain stale completions */
+    }
     esp_err_t err = usb_host_transfer_submit_control(s_printer.client, xfer);
     if (err != ESP_OK) {
         return err;
     }
-    if (xSemaphoreTake(s_printer.xfer_done, pdMS_TO_TICKS(2000)) != pdTRUE) {
+    if (wait_transfer(pdMS_TO_TICKS(2000)) != ESP_OK) {
         return ESP_ERR_TIMEOUT;
     }
     if (xfer->status != USB_TRANSFER_STATUS_COMPLETED) {
@@ -104,11 +127,13 @@ esp_err_t usb_printer_xfer(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t
                            int *actual, int *status)
 {
     usb_transfer_t *xfer = control ? s_printer.ctrl_xfer : s_printer.bulk_xfer;
-    if (control) {
-        memcpy(xfer->data_buffer, buf, num_bytes);
-    } else {
-        memcpy(xfer->data_buffer, buf, num_bytes);
+    if (control && num_bytes > CTRL_XFER_SIZE) {
+        return ESP_ERR_INVALID_ARG;
     }
+    if (num_bytes > XFER_BUF_SIZE) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    memcpy(xfer->data_buffer, buf, num_bytes);
     xfer->device_handle = s_printer.dev_hdl;
     xfer->bEndpointAddress = control ? 0 : ep_addr;
     xfer->num_bytes = num_bytes;
@@ -116,15 +141,33 @@ esp_err_t usb_printer_xfer(bool control, uint8_t ep_addr, uint8_t *buf, uint32_t
     xfer->callback = transfer_done_cb;
     xfer->context = NULL;
 
+    while (xSemaphoreTake(s_printer.xfer_done, 0) == pdTRUE) {
+        /* drain stale completions */
+    }
     esp_err_t err = control ? usb_host_transfer_submit_control(s_printer.client, xfer)
                             : usb_host_transfer_submit(xfer);
     if (err != ESP_OK) {
         return err;
     }
-    if (xSemaphoreTake(s_printer.xfer_done, pdMS_TO_TICKS(30000)) != pdTRUE) {
+    if (wait_transfer(pdMS_TO_TICKS(30000)) != ESP_OK) {
         *status = -110;
         *actual = 0;
         return ESP_ERR_TIMEOUT;
+    }
+    /* IN data is written by the host controller into the transfer buffer;
+     * mirror it back into the caller's buffer (USB/IP returns it to the OS). */
+    if (xfer->status == USB_TRANSFER_STATUS_COMPLETED) {
+        if (control) {
+            int setup_len = (int)sizeof(usb_setup_packet_t);
+            int data_len = (int)xfer->actual_num_bytes - setup_len;
+            if (data_len > 0 && (uint32_t)data_len <= num_bytes - (uint32_t)setup_len) {
+                memcpy(buf + setup_len, xfer->data_buffer + setup_len, (size_t)data_len);
+            }
+        } else if ((ep_addr & 0x80) != 0) {
+            if (xfer->actual_num_bytes > 0 && (uint32_t)xfer->actual_num_bytes <= num_bytes) {
+                memcpy(buf, xfer->data_buffer, (size_t)xfer->actual_num_bytes);
+            }
+        }
     }
     *actual = xfer->actual_num_bytes;
     *status = status_to_errno(xfer->status);
@@ -140,37 +183,51 @@ static esp_err_t find_printer_interface(usb_device_handle_t dev_hdl, uint8_t *in
         return err;
     }
 
-    const usb_intf_desc_t *intf = NULL;
-    int offset = 0;
-    while ((intf = (const usb_intf_desc_t *)usb_parse_next_descriptor_of_type(
-                (const usb_standard_desc_t *)intf, cfg_desc->wTotalLength,
-                USB_W_VALUE_DT_INTERFACE, &offset)) != NULL) {
-        if (intf->bInterfaceClass == PRINTER_CLASS && intf->bInterfaceSubClass == PRINTER_SUBCLASS) {
-            const usb_ep_desc_t *ep = NULL;
-            int ep_offset = offset;
-            bool found_out = false;
-            bool found_in = false;
-            while ((ep = (const usb_ep_desc_t *)usb_parse_next_descriptor_of_type(
-                        (const usb_standard_desc_t *)ep, cfg_desc->wTotalLength,
-                        USB_W_VALUE_DT_ENDPOINT, &ep_offset)) != NULL) {
-                if ((ep->bmAttributes & 0x03) != EP_ATTR_BULK) {
-                    continue;
-                }
-                if ((ep->bEndpointAddress & 0x80) == 0 && !found_out) {
-                    *ep_out = ep->bEndpointAddress;
-                    found_out = true;
-                } else if ((ep->bEndpointAddress & 0x80) != 0 && !found_in) {
-                    *ep_in = ep->bEndpointAddress;
-                    found_in = true;
-                }
-            }
+    /* Walk the configuration descriptors by hand: the usb_parse_* helpers
+     * require a non-NULL starting descriptor and would otherwise also scan
+     * past the end of a printer interface into the next one. */
+    const uint8_t *p = (const uint8_t *)cfg_desc;
+    const uint8_t *end = p + cfg_desc->wTotalLength;
+    bool in_printer_intf = false;
+    bool found_out = false;
+    uint8_t out_addr = 0;
+    uint8_t in_addr = 0;
+
+    while ((size_t)(end - p) >= sizeof(usb_standard_desc_t)) {
+        const usb_standard_desc_t *desc = (const usb_standard_desc_t *)p;
+        if (desc->bLength < sizeof(usb_standard_desc_t) || p + desc->bLength > end) {
+            break;
+        }
+        if (desc->bDescriptorType == USB_B_DESCRIPTOR_TYPE_INTERFACE) {
             if (found_out) {
+                break;  /* endpoints of the first matching interface are enough */
+            }
+            const usb_intf_desc_t *intf = (const usb_intf_desc_t *)desc;
+            in_printer_intf = (intf->bInterfaceClass == PRINTER_CLASS &&
+                               intf->bInterfaceSubClass == PRINTER_SUBCLASS);
+            if (in_printer_intf) {
                 *intf_num = intf->bInterfaceNumber;
-                return ESP_OK;
+            }
+        } else if (in_printer_intf && desc->bDescriptorType == USB_B_DESCRIPTOR_TYPE_ENDPOINT) {
+            const usb_ep_desc_t *ep = (const usb_ep_desc_t *)desc;
+            if ((ep->bmAttributes & 0x03) == EP_ATTR_BULK) {
+                if ((ep->bEndpointAddress & 0x80) == 0 && !found_out) {
+                    out_addr = ep->bEndpointAddress;
+                    found_out = true;
+                } else if ((ep->bEndpointAddress & 0x80) != 0 && in_addr == 0) {
+                    in_addr = ep->bEndpointAddress;
+                }
             }
         }
+        p += desc->bLength;
     }
-    return ESP_ERR_NOT_FOUND;
+
+    if (!found_out) {
+        return ESP_ERR_NOT_FOUND;
+    }
+    *ep_out = out_addr;
+    *ep_in = in_addr;
+    return ESP_OK;
 }
 
 static void printer_connect(uint8_t dev_addr)
@@ -269,12 +326,17 @@ static void printer_disconnect(usb_device_handle_t dev_hdl)
 
 static void client_event_cb(const usb_host_client_event_msg_t *event_msg, void *arg)
 {
+    /* Runs inside usb_host_client_handle_events(): never block or start
+     * transfers here, just remember what happened and let the printer task
+     * process it outside the event pumping loop. */
     switch (event_msg->event) {
     case USB_HOST_CLIENT_EVENT_NEW_DEV:
-        printer_connect(event_msg->new_dev.address);
+        s_printer.pending_new = true;
+        s_printer.pending_dev_addr = event_msg->new_dev.address;
         break;
     case USB_HOST_CLIENT_EVENT_DEV_GONE:
-        printer_disconnect(event_msg->dev_gone.dev_hdl);
+        s_printer.pending_gone = true;
+        s_printer.pending_gone_hdl = event_msg->dev_gone.dev_hdl;
         break;
     default:
         break;
@@ -324,7 +386,16 @@ static void usb_printer_task(void *arg)
 
     while (1) {
         xSemaphoreTake(s_printer.mux, portMAX_DELAY);
-        usb_host_client_handle_events(s_printer.client, pdMS_TO_TICKS(100));
+        usb_host_client_handle_events(s_printer.client, pdMS_TO_TICKS(20));
+
+        if (s_printer.pending_gone) {
+            s_printer.pending_gone = false;
+            printer_disconnect(s_printer.pending_gone_hdl);
+        }
+        if (s_printer.pending_new) {
+            s_printer.pending_new = false;
+            printer_connect(s_printer.pending_dev_addr);
+        }
         if (s_printer.connected && !s_printer.exclusive && job_queue_available() > 0) {
             size_t n = job_queue_read(xfer_buf, XFER_BUF_SIZE);
             if (n > 0) {
@@ -341,6 +412,7 @@ static void usb_printer_task(void *arg)
             }
         }
         xSemaphoreGive(s_printer.mux);
+        vTaskDelay(pdMS_TO_TICKS(5));
     }
 }
 

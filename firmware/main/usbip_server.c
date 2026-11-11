@@ -84,28 +84,38 @@ static int write_full(int sock, const uint8_t *buf, size_t len)
     return 0;
 }
 
-static void fill_device_record(uint8_t *rec)
+/* usbip_usb_device is exactly 312 bytes:
+ * path[256] busid[32] busnum devnum speed vid pid bcdDevice class subclass
+ * protocol configValue numConfigurations numInterfaces. The interface entries
+ * (4 bytes each) used by OP_REP_DEVLIST follow the 312-byte record. */
+static int fill_device_record(uint8_t *rec)
 {
     memset(rec, 0, DEVLIST_DEV_SIZE);
     snprintf((char *)rec, 256, "/sys/devices/platform/usb/1-1");
     snprintf((char *)rec + 256, 32, BUSID_STR);
     usb_printer_ids_t ids;
     usb_printer_get_ids(&ids);
-    put_u32(rec + 0x12C, BUSNUM);
-    put_u32(rec + 0x130, DEVNUM);
-    put_u32(rec + 0x134, ids.speed);
-    put_u16(rec + 0x138, ids.vid);
-    put_u16(rec + 0x13A, ids.pid);
-    put_u16(rec + 0x13C, ids.bcd_device);
-    rec[0x13E] = ids.dev_class;
-    rec[0x13F] = ids.dev_subclass;
-    rec[0x140] = ids.dev_protocol;
-    rec[0x141] = ids.config_value;
-    rec[0x142] = ids.num_configs;
-    rec[0x143] = ids.num_interfaces;
-    for (int i = 0; i < ids.num_interfaces && i < 8; i++) {
-        uint8_t *inf = rec + 0x144 + i * 4;
-        inf[0] = 0x07;
+    put_u32(rec + 0x120, BUSNUM);
+    put_u32(rec + 0x124, DEVNUM);
+    put_u32(rec + 0x128, ids.speed);
+    put_u16(rec + 0x12C, ids.vid);
+    put_u16(rec + 0x12E, ids.pid);
+    put_u16(rec + 0x130, ids.bcd_device);
+    rec[0x132] = ids.dev_class;
+    rec[0x133] = ids.dev_subclass;
+    rec[0x134] = ids.dev_protocol;
+    rec[0x135] = ids.config_value;
+    rec[0x136] = ids.num_configs;
+    int nint = ids.num_interfaces > 8 ? 8 : ids.num_interfaces;
+    rec[0x137] = (uint8_t)nint;
+    return nint;
+}
+
+static void fill_interfaces(uint8_t *rec, int nint)
+{
+    for (int i = 0; i < nint; i++) {
+        uint8_t *inf = rec + i * 4;
+        inf[0] = 0x07;  /* printer class */
         inf[1] = 0x01;
         inf[2] = 0x02;
         inf[3] = 0;
@@ -123,8 +133,9 @@ static void handle_devlist(int sock)
     put_u32(rep + 8, ready ? 1 : 0);
     size_t len = OP_COMMON_SIZE + 4;
     if (ready) {
-        fill_device_record(rep + len);
-        len += DEVLIST_DEV_SIZE + 8 * 4;
+        int nint = fill_device_record(rep + len);
+        fill_interfaces(rep + len + DEVLIST_DEV_SIZE, nint);
+        len += DEVLIST_DEV_SIZE + (size_t)nint * 4;
     }
     write_full(sock, rep, len);
 }
@@ -260,7 +271,9 @@ static void handle_import(int sock)
     if (read_full(sock, busid, 32) < 0) {
         return;
     }
-    uint8_t rep[OP_COMMON_SIZE + 4 + DEVLIST_DEV_SIZE];
+    /* OP_REP_IMPORT is op_common (8 bytes) immediately followed by the
+     * 312-byte device record -- unlike devlist, there is no extra count. */
+    uint8_t rep[OP_COMMON_SIZE + DEVLIST_DEV_SIZE];
     memset(rep, 0, sizeof(rep));
     put_u16(rep + 0, USBIP_VERSION);
     put_u16(rep + 2, OP_REP_IMPORT);
@@ -270,8 +283,8 @@ static void handle_import(int sock)
         return;
     }
     put_u32(rep + 4, 0);
-    fill_device_record(rep + OP_COMMON_SIZE + 4);
-    if (write_full(sock, rep, OP_COMMON_SIZE + 4 + DEVLIST_DEV_SIZE) < 0) {
+    fill_device_record(rep + OP_COMMON_SIZE);
+    if (write_full(sock, rep, OP_COMMON_SIZE + DEVLIST_DEV_SIZE) < 0) {
         return;
     }
     handle_urb_loop(sock);
