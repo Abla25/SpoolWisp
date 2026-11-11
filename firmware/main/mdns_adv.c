@@ -15,7 +15,7 @@ static const char *TAG = "mdns";
 #define PROTO    "_tcp"
 
 static bool s_started;
-static char s_instance[80] = "SpoolWisp";
+static char s_instance[80] = "SpoolWisp [WIFI]";
 static char s_pending_name[80];
 static char s_pending_mfg[64];
 static char s_pending_mdl[64];
@@ -31,6 +31,7 @@ static bool build_printer_name(const char *mfg, const char *mdl, char *out, size
     } else {
         return false;
     }
+    strlcat(out, " [WIFI]", out_len);
     return true;
 }
 
@@ -64,7 +65,7 @@ void mdns_adv_start(void)
     if ((err = mdns_hostname_set("spoolwisp")) != ESP_OK) {
         ESP_LOGW(TAG, "mdns_hostname_set: %s", esp_err_to_name(err));
     }
-    const char *instance = s_pending_name[0] != '\0' ? s_pending_name : "SpoolWisp";
+    const char *instance = s_pending_name[0] != '\0' ? s_pending_name : "SpoolWisp [WIFI]";
     mdns_instance_name_set(instance);
 
     static mdns_txt_item_t raw_txt[] = {
@@ -143,16 +144,16 @@ void mdns_adv_clear_printer(void)
     s_pending_name[0] = '\0';
     s_pending_mfg[0] = '\0';
     s_pending_mdl[0] = '\0';
-    if (!s_started || strcmp(s_instance, "SpoolWisp") == 0) {
+    if (!s_started || strcmp(s_instance, "SpoolWisp [WIFI]") == 0) {
         return;
     }
 
-    esp_err_t err_raw = mdns_service_instance_name_set(SVC_RAW, PROTO, "SpoolWisp");
-    esp_err_t err_lpd = mdns_service_instance_name_set(SVC_LPD, PROTO, "SpoolWisp");
+    esp_err_t err_raw = mdns_service_instance_name_set(SVC_RAW, PROTO, "SpoolWisp [WIFI]");
+    esp_err_t err_lpd = mdns_service_instance_name_set(SVC_LPD, PROTO, "SpoolWisp [WIFI]");
     if (err_raw != ESP_OK && err_lpd != ESP_OK) {
         return;
     }
-    strlcpy(s_instance, "SpoolWisp", sizeof(s_instance));
+    strlcpy(s_instance, "SpoolWisp [WIFI]", sizeof(s_instance));
 
     mdns_service_txt_item_remove(SVC_RAW, PROTO, "usb_MFG");
     mdns_service_txt_item_remove(SVC_LPD, PROTO, "usb_MFG");
