@@ -67,16 +67,88 @@ static int listen_on(uint16_t port)
     return sock;
 }
 
+static bool pjl_is_query(const uint8_t *buf, size_t len)
+{
+    static const char uel[] = "\x1b%-12345X";
+    if (len >= sizeof(uel) - 1 && memcmp(buf, uel, sizeof(uel) - 1) == 0) {
+        return true;
+    }
+    return len >= 4 && memcmp(buf, "@PJL", 4) == 0;
+}
+
+static void pjl_log_query(const uint8_t *buf, size_t len)
+{
+    char line[96];
+    size_t n = len < sizeof(line) - 1 ? len : sizeof(line) - 1;
+    for (size_t i = 0; i < n; i++) {
+        uint8_t c = buf[i];
+        line[i] = (c >= 32 && c < 127) ? (char)c : '.';
+    }
+    line[n] = '\0';
+    ESP_LOGI(TAG, "PJL query: %s", line);
+}
+
+/* Minimal read-only PJL responder: CUPS/macOS opens a bidirectional channel on
+ * the raw port and asks for device ID / status. Answering it lets the queue
+ * proceed to the data connection; no printing happens on this path. */
+static void pjl_respond(int conn, const uint8_t *buf, size_t len)
+{
+    char text[512];
+    size_t n = len < sizeof(text) - 1 ? len : sizeof(text) - 1;
+    memcpy(text, buf, n);
+    text[n] = '\0';
+
+    const char *reply;
+    if (strstr(text, "INFO STATUS") != NULL) {
+        reply = "\x1b%-12345X@PJL INFO STATUS\r\n"
+                "CODE=10001\r\n"
+                "DISPLAY=\"Ready\"\r\n"
+                "ONLINE=TRUE\r\n\x0c";
+    } else if (strstr(text, "USTATUS") != NULL) {
+        reply = "\x1b%-12345X@PJL USTATUS DEVICE=0\r\n\x0c";
+    } else {
+        reply = "\x1b%-12345X@PJL INFO ID\r\n"
+                "\"EPSON L1800 Series\"\r\n\x0c";
+    }
+    send(conn, reply, strlen(reply), 0);
+}
+
 static void raw_session(int conn)
 {
-    static uint8_t buf[RECV_BUF_SIZE];
-    ESP_LOGI(TAG, "raw client connected (port %d)", CONFIG_APP_RAW_PORT);
-    int r;
-    while ((r = recv(conn, buf, sizeof(buf), 0)) > 0) {
-        job_queue_write(buf, r);
+    uint8_t *buf = malloc(RECV_BUF_SIZE);
+    if (buf == NULL) {
+        close(conn);
+        return;
     }
+    ESP_LOGI(TAG, "raw client connected (port %d)", CONFIG_APP_RAW_PORT);
+    bool pjl_mode = false;
+    int r;
+    while ((r = recv(conn, buf, RECV_BUF_SIZE, 0)) > 0) {
+        if (pjl_is_query(buf, (size_t)r)) {
+            pjl_mode = true;
+            pjl_log_query(buf, (size_t)r);
+            pjl_respond(conn, buf, (size_t)r);
+            continue;
+        }
+        /* A non-PJL chunk means this connection carries print data. */
+        pjl_mode = false;
+        job_queue_write(buf, (size_t)r);
+    }
+    free(buf);
     close(conn);
     ESP_LOGI(TAG, "raw client disconnected, job flushed to queue");
+}
+
+typedef struct {
+    int conn;
+} raw_client_t;
+
+static void raw_client_task(void *arg)
+{
+    raw_client_t *client = (raw_client_t *)arg;
+    raw_session(client->conn);
+    free(client);
+    vTaskDelete(NULL);
 }
 
 static void raw_server_task(void *arg)
@@ -99,7 +171,18 @@ static void raw_server_task(void *arg)
             close(conn);
             continue;
         }
-        raw_session(conn);
+        /* One task per connection: the bidi/PJL channel must not block the
+         * job data connection (and vice versa). */
+        raw_client_t *client = malloc(sizeof(*client));
+        if (client == NULL) {
+            close(conn);
+            continue;
+        }
+        client->conn = conn;
+        if (xTaskCreate(raw_client_task, "raw_cli", 4096, client, 5, NULL) != pdPASS) {
+            close(conn);
+            free(client);
+        }
     }
 }
 
