@@ -25,6 +25,7 @@ That is what guarantees the output is byte-identical to a direct USB connection.
 | `print_server.c` | TCP 9100 raw server + minimal LPD server on 515 |
 | `job_queue.c` | PSRAM ring buffer with flow control |
 | `usb_printer.c` | USB host: enumerate printer-class device, claim interface, GET_DEVICE_ID, bulk OUT writes |
+| `mdns_adv.c` | Bonjour/mDNS advertisement: raw 9100 (`_pdl-datastream`), LPD 515 (`_printer`), host `spoolwisp.local`; name/TXT updated from the printer's USB device ID |
 
 ## USB details
 

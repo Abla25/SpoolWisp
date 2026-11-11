@@ -32,6 +32,15 @@ pio device monitor   # 115200 baud
 115200-baud logger (pyserial) that also pulses the auto-reset circuit.
 
 
+## Discovery (Bonjour)
+
+The firmware advertises itself over mDNS (`espressif/mdns` managed component,
+declared in `main/idf_component.yml`): host `spoolwisp.local`, service
+`_pdl-datastream._tcp` on 9100 and `_printer._tcp` on 515. When a USB printer is
+detected, the advertised instance name and the `usb_MFG` / `usb_MDL` / `ty` TXT
+records are switched to the printer's real IEEE-1284 ID (`GET_DEVICE_ID`), and
+revert to `SpoolWisp` when it is unplugged.
+
 ## Configuration (menuconfig → "Project configuration")
 
 | Option | Default | Meaning |

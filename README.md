@@ -37,6 +37,11 @@ identical to a direct USB connection.
   Linux/Windows it can be attached as if locally plugged in — **ink levels,
   Status Monitor, nozzle check, head cleaning, all bidirectional functions work**.
   (`docs/BIDIRECTIONAL.md`)
+- **Bonjour/mDNS auto-discovery**: macOS and Linux find the printer by
+  themselves — no IP address to type. The advertised name is the real printer
+  model read from its USB IEEE-1284 ID (e.g. `Epson L1800 Series`), and the
+  host name is always `spoolwisp.local`, so DHCP changes do not break the
+  queue.
 - USB host driver for USB printer-class devices (VID filter: Epson `0x04B8`
   by default; set `APP_PRINTER_VID=0` for **any** USB printer)
 - PSRAM ring-buffer queue with TCP flow control — jobs of any size stream through

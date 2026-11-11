@@ -6,6 +6,7 @@
 #include "usb_printer.h"
 #include "print_server.h"
 #include "usbip_server.h"
+#include "mdns_adv.h"
 
 static const char *TAG = "main";
 
@@ -22,6 +23,7 @@ void app_main(void)
 
     job_queue_init();
     ESP_ERROR_CHECK(wifi_sta_start());
+    mdns_adv_start();
     usb_printer_start();
     print_server_start();
     usbip_server_start();

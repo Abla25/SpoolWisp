@@ -1,6 +1,8 @@
 #include "usb_printer.h"
 #include "job_queue.h"
+#include "mdns_adv.h"
 
+#include <stdio.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -226,7 +228,23 @@ static void printer_connect(uint8_t dev_addr)
 
     uint8_t dev_id[256] = {0};
     if (control_request(PRINTER_REQ_GET_DEVICE_ID, 0, s_printer.intf_num, 255, dev_id) == ESP_OK) {
-        ESP_LOGI(TAG, "printer: %s", (char *)(dev_id + 2));
+        const char *id_str = (const char *)(dev_id + 2);
+        ESP_LOGI(TAG, "printer: %s", id_str);
+
+        /* IEEE-1284 device ID, e.g. "MFG:Epson;MDL:L1800 Series;CMD:...;".
+         * Advertise the real printer name over Bonjour so the OS shows the
+         * printer itself (and can preselect the matching driver). */
+        char mfg[64] = {0};
+        char mdl[64] = {0};
+        const char *field = strstr(id_str, "MFG:");
+        if (field != NULL) {
+            sscanf(field + 4, "%63[^;]", mfg);
+        }
+        field = strstr(id_str, "MDL:");
+        if (field != NULL) {
+            sscanf(field + 4, "%63[^;]", mdl);
+        }
+        mdns_adv_set_printer(mfg, mdl);
     }
     s_printer.connected = true;
     ESP_LOGI(TAG, "printer ready: intf=%d ep_out=0x%02X ep_in=0x%02X",
@@ -243,6 +261,7 @@ static void printer_disconnect(usb_device_handle_t dev_hdl)
     if (s_printer.dev_hdl == dev_hdl) {
         s_printer.connected = false;
         ESP_LOGW(TAG, "printer disconnected");
+        mdns_adv_clear_printer();
         usb_host_device_close(s_printer.client, s_printer.dev_hdl);
         s_printer.dev_hdl = NULL;
     }
