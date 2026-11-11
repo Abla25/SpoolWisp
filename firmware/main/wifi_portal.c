@@ -12,6 +12,7 @@
 #include "esp_wifi.h"
 #include "lwip/sockets.h"
 #include "nvs_flash.h"
+#include "usb_printer.h"
 
 static const char *TAG = "portal";
 
@@ -141,6 +142,31 @@ static void handle_http(int conn)
         return;
     }
 
+    if (strcmp(path, "/status") == 0) {
+        usb_printer_ids_t ids;
+        usb_printer_get_ids(&ids);
+        static char body[256];
+        int n = snprintf(body, sizeof(body),
+                         "{\"printer_ready\":%s,\"vid\":\"0x%04X\",\"pid\":\"0x%04X\"}",
+                         usb_printer_is_ready() ? "true" : "false", ids.vid, ids.pid);
+        send_response(conn, 200, "application/json", body, n);
+        return;
+    }
+
+    if (strcmp(method, "POST") == 0 && strcmp(path, "/forget") == 0) {
+        nvs_handle_t nvs;
+        if (nvs_open(NVS_NS, NVS_READWRITE, &nvs) == ESP_OK) {
+            nvs_erase_key(nvs, "ssid");
+            nvs_erase_key(nvs, "pass");
+            nvs_commit(nvs);
+            nvs_close(nvs);
+        }
+        send_response(conn, 200, "text/plain", "Forgotten. Rebooting...", 22);
+        vTaskDelay(pdMS_TO_TICKS(1500));
+        esp_restart();
+        return;
+    }
+
     if (strcmp(method, "POST") == 0 && strcmp(path, "/save") == 0) {
         char *body = strstr(req, "\r\n\r\n");
         if (!body) {
@@ -172,10 +198,14 @@ static void handle_http(int conn)
     int off = snprintf(page, sizeof(page),
         "<!DOCTYPE html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>ESP32 Print Server setup</title></head><body>"
-        "<h2>ESP32 Print Server</h2><p>Select your WiFi network:</p>"
-        "<form method='POST' action='/save'>"
-        "<select name='ssid'>");
+        "<title>SpoolWisp setup</title>"
+        "<style>body{background:#111;color:#eee;font:15px/1.5 monospace;display:flex;"
+        "justify-content:center;padding-top:8vh}div{width:min(92vw,340px)}h1{font-size:18px}"
+        "select,input{width:100%%;background:#222;color:#eee;border:1px solid #444;padding:8px;"
+        "margin:6px 0;font:inherit;box-sizing:border-box}button{width:100%%;padding:10px;"
+        "background:#eee;color:#111;border:0;font:inherit;cursor:pointer}</style>"
+        "</head><body><div><h1>SpoolWisp</h1>"
+        "<form method='POST' action='/save'><select name='ssid'>");
     for (int i = 0; i < count && off < (int)sizeof(page) - 160; i++) {
         char esc[33];
         size_t j = 0;
@@ -187,10 +217,9 @@ static void handle_http(int conn)
                         "<option value='%s'>%s (%d dBm)</option>", esc, esc, aps[i].rssi);
     }
     off += snprintf(page + off, sizeof(page) - off,
-        "</select><br><br>"
-        "Hidden network SSID (optional):<br><input name='ssid2' maxlength='32'><br><br>"
-        "Password:<br><input type='password' name='pass' maxlength='63'><br><br>"
-        "<input type='submit' value='Connect'></form></body></html>");
+        "</select><input name='ssid2' maxlength='32' placeholder='hidden SSID (optional)'>"
+        "<input type='password' name='pass' maxlength='63' placeholder='password'>"
+        "<button type='submit'>connect</button></form></div></body></html>");
     send_response(conn, 200, "text/html", page, off);
 }
 
@@ -232,7 +261,7 @@ static void dns_task(void *arg)
         struct sockaddr_in from;
         socklen_t flen = sizeof(from);
         int r = recvfrom(sock, buf, sizeof(buf), 0, (struct sockaddr *)&from, &flen);
-        if (r < 12 || (buf[2] & 0x80)) {
+        if (r < 12 || r > (int)sizeof(buf) - 16 || (buf[2] & 0x80)) {
             continue;
         }
         uint8_t resp[512];
@@ -268,19 +297,26 @@ void wifi_portal_run(void)
     wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
 
+    /* device-specific WPA2 password so a random passer-by cannot reconfigure
+     * the device: "cfg" + last 3 MAC bytes (9 chars, printed on serial only) */
+    char ap_pass[16];
+    snprintf(ap_pass, sizeof(ap_pass), "cfg%02X%02X%02X", mac[3], mac[4], mac[5]);
+
     wifi_config_t ap_cfg = {
         .ap = {
             .channel = 1,
             .max_connection = 4,
-            .authmode = WIFI_AUTH_OPEN,
+            .authmode = WIFI_AUTH_WPA2_PSK,
         },
     };
     strlcpy((char *)ap_cfg.ap.ssid, ap_ssid, sizeof(ap_cfg.ap.ssid));
     ap_cfg.ap.ssid_len = strlen(ap_ssid);
+    strlcpy((char *)ap_cfg.ap.password, ap_pass, sizeof(ap_cfg.ap.password));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
 
-    ESP_LOGI(TAG, "connect to AP \"%s\" and open http://%s", ap_ssid, PORTAL_IP);
+    ESP_LOGI(TAG, "connect to AP \"%s\" (password: %s) and open http://%s",
+             ap_ssid, ap_pass, PORTAL_IP);
     xTaskCreate(http_task, "portal_http", 8192, NULL, 5, NULL);
     xTaskCreate(dns_task, "portal_dns", 3072, NULL, 3, NULL);
     vTaskSuspend(NULL);

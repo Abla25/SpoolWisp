@@ -1,4 +1,7 @@
-# ESP32-S3 WiFi Print Server for Epson L1800
+# SpoolWisp
+
+**Wireless USB print server for the Epson L1800 (and any USB printer) on an ESP32-S3.**
+Spool + wisp: your print queue, set free over WiFi.
 
 Turns a USB printer (built and tested for the Epson L1800) into a wireless network
 printer using an ESP32-S3 dual-USB board, **without losing the Epson driver or any
@@ -24,9 +27,10 @@ identical to a direct USB connection.
 ## Features
 
 - **WiFi setup portal**: on first boot (or if the saved network is unreachable)
-  the ESP opens an AP (`ESP32-PrintServer-XXXXXX`) with a web page at
-  192.168.4.1 to scan networks and enter the password — no reflashing needed.
-  Credentials are stored in NVS. (`docs/PROVISIONING.md`)
+  the ESP opens a WPA2-protected AP (`SpoolWisp-XXXXXX`, password printed on the
+  serial log) with a minimal web page at 192.168.4.1 to scan networks and enter
+  the password — no reflashing needed. Credentials are stored in NVS.
+  (`docs/PROVISIONING.md`)
 - Raw TCP printing on port **9100** (Windows Standard TCP/IP port, Linux `socket://`)
 - Minimal **LPD (RFC 1179)** server on port **515** (macOS/Linux LPD)
 - **USB/IP server (TCP 3240)**: exports the printer as a remote USB device, so on
@@ -49,6 +53,7 @@ docs/BIDIRECTIONAL.md  USB/IP: full bidirectional USB (ink levels, status, clean
 docs/SETUP_WINDOWS.md  add the printer in Windows keeping the Epson driver
 docs/SETUP_MACOS.md    add the printer in macOS keeping the Epson driver
 docs/SETUP_LINUX.md    CUPS setup on Linux keeping the Epson driver
+docs/SECURITY.md       threat model and hardening notes
 ```
 
 ## Quick start

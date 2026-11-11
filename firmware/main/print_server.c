@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_netif.h"
 #include "lwip/err.h"
 #include "lwip/sockets.h"
 #include "lwip/sys.h"
@@ -14,6 +15,29 @@
 static const char *TAG = "print_server";
 
 #define RECV_BUF_SIZE 4096
+
+bool client_allowed(const struct sockaddr_in *peer)
+{
+#ifdef CONFIG_APP_RESTRICT_LOCAL_SUBNET
+    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (sta == NULL || peer == NULL) {
+        return true;
+    }
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(sta, &ip_info) != ESP_OK) {
+        return true;
+    }
+    uint32_t mask = ip_info.netmask.addr;
+    uint32_t local = ip_info.ip.addr;
+    uint32_t remote = peer->sin_addr.s_addr;
+    if ((remote & mask) != (local & mask)) {
+        esp_ip4_addr_t r = { .addr = remote };
+        ESP_LOGW(TAG, "rejected client " IPSTR " (outside local subnet)", IP2STR(&r));
+        return false;
+    }
+#endif
+    return true;
+}
 
 static int listen_on(uint16_t port)
 {
@@ -63,9 +87,15 @@ static void raw_server_task(void *arg)
     }
     ESP_LOGI(TAG, "raw print server listening on TCP %d", CONFIG_APP_RAW_PORT);
     while (1) {
-        int conn = accept(sock, NULL, NULL);
+        struct sockaddr_in peer;
+        socklen_t plen = sizeof(peer);
+        int conn = accept(sock, (struct sockaddr *)&peer, &plen);
         if (conn < 0) {
             vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        if (!client_allowed(&peer)) {
+            close(conn);
             continue;
         }
         raw_session(conn);
@@ -204,9 +234,15 @@ static void lpd_server_task(void *arg)
     }
     ESP_LOGI(TAG, "LPD server listening on TCP %d", CONFIG_APP_LPD_PORT);
     while (1) {
-        int conn = accept(sock, NULL, NULL);
+        struct sockaddr_in peer;
+        socklen_t plen = sizeof(peer);
+        int conn = accept(sock, (struct sockaddr *)&peer, &plen);
         if (conn < 0) {
             vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        if (!client_allowed(&peer)) {
+            close(conn);
             continue;
         }
         lpd_session(conn);

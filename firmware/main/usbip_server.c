@@ -1,5 +1,6 @@
 #include "usbip_server.h"
 #include "usb_printer.h"
+#include "print_server.h"
 
 #include <string.h>
 
@@ -166,14 +167,25 @@ static void handle_urb_loop(int sock)
         if (num_packets != -1) {
             ESP_LOGW(TAG, "isochronous transfers not supported");
         }
-        if (xfer_len < 0 || (uint32_t)xfer_len > XFER_BUF_SIZE - 8) {
-            ESP_LOGW(TAG, "transfer too large: %d", (int)xfer_len);
-        }
 
         bool is_control = (ep == 0);
         bool dir_in = (direction == USBIP_DIR_IN);
-        uint32_t payload = is_control ? (uint32_t)xfer_len : (uint32_t)xfer_len;
+        uint32_t payload = xfer_len > 0 ? (uint32_t)xfer_len : 0;
+
         if (xfer_len < 0 || payload + 8 > XFER_BUF_SIZE) {
+            ESP_LOGW(TAG, "transfer too large: %d", (int)xfer_len);
+            /* drain a sent payload so the TCP stream stays in sync */
+            if (!dir_in && payload > 0) {
+                uint8_t scratch[512];
+                uint32_t left = payload;
+                while (left > 0) {
+                    uint32_t chunk = left > sizeof(scratch) ? sizeof(scratch) : left;
+                    if (read_full(sock, scratch, chunk) < 0) {
+                        goto urb_done;
+                    }
+                    left -= chunk;
+                }
+            }
             uint8_t rep[URB_HDR_SIZE];
             memset(rep, 0, sizeof(rep));
             put_u32(rep + 0, USBIP_RET_SUBMIT);
@@ -237,6 +249,7 @@ static void handle_urb_loop(int sock)
         }
     }
 
+urb_done:
     usb_printer_set_exclusive(false);
     ESP_LOGI(TAG, "USB/IP client detached, raw printing resumed");
 }
@@ -285,9 +298,15 @@ static void usbip_task(void *arg)
     ESP_LOGI(TAG, "USB/IP server listening on TCP %d (bidirectional mode)", CONFIG_APP_USBIP_PORT);
 
     while (1) {
-        int conn = accept(sock, NULL, NULL);
+        struct sockaddr_in peer;
+        socklen_t plen = sizeof(peer);
+        int conn = accept(sock, (struct sockaddr *)&peer, &plen);
         if (conn < 0) {
             vTaskDelay(pdMS_TO_TICKS(100));
+            continue;
+        }
+        if (!client_allowed(&peer)) {
+            close(conn);
             continue;
         }
         uint8_t op[OP_COMMON_SIZE];

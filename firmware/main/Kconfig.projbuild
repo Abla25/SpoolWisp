@@ -82,8 +82,21 @@ menu "WiFi provisioning portal"
 
     config APP_PORTAL_AP_PREFIX
         string "Portal AP name prefix"
-        default "ESP32-PrintServer"
+        default "SpoolWisp"
         depends on APP_ENABLE_PORTAL
+
+endmenu
+
+menu "Security"
+
+    config APP_RESTRICT_LOCAL_SUBNET
+        bool "Only accept print/USBIP clients from the local subnet"
+        default y
+        help
+            When enabled, TCP 9100 (raw), 515 (LPD) and 3240 (USB/IP) only
+            accept connections from IPs in the same subnet as the ESP.
+            The provisioning portal AP is always WPA2-protected with a
+            device-specific password (printed on the serial log).
 
 endmenu
 
