@@ -16,6 +16,22 @@ idf.py -p /dev/ttyUSB0 flash monitor
 
 `sdkconfig.defaults` already sets: target esp32s3, 8MB flash, octal PSRAM @ 80MHz.
 
+### Alternative: PlatformIO
+
+`platformio.ini` builds the exact same sources with the pioarduino platform
+(ESP-IDF 5.5.4). Useful when you don't want a standalone ESP-IDF install:
+
+```bash
+cd firmware
+pio run              # build
+pio run -t upload    # flash (UART port of the board)
+pio device monitor   # 115200 baud
+```
+
+`tools/serial_monitor.py` at the repository root is a minimal persistent
+115200-baud logger (pyserial) that also pulses the auto-reset circuit.
+
+
 ## Configuration (menuconfig → "Project configuration")
 
 | Option | Default | Meaning |

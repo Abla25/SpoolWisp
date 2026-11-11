@@ -109,6 +109,7 @@ esp_err_t wifi_sta_start(void)
 #ifdef CONFIG_APP_ENABLE_PORTAL
         ESP_LOGW(TAG, "no WiFi credentials stored, starting setup portal");
         wifi_portal_run();
+        return ESP_OK;
 #else
         ESP_LOGE(TAG, "no WiFi credentials configured");
         return ESP_ERR_INVALID_STATE;
@@ -119,6 +120,7 @@ esp_err_t wifi_sta_start(void)
 #ifdef CONFIG_APP_ENABLE_PORTAL
         ESP_LOGW(TAG, "connection failed, starting setup portal");
         wifi_portal_run();
+        return ESP_OK;
 #else
         return ESP_FAIL;
 #endif

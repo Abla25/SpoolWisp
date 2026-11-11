@@ -1,7 +1,16 @@
 firmware/build/
 firmware/sdkconfig
+firmware/sdkconfig.esp32s3
 firmware/managed_components/
 firmware/dependencies.lock
 *.bin
 *.elf
 *.map
+
+# PlatformIO local build harness (see firmware/platformio.ini)
+firmware/.pio/
+.pio-core/
+
+# Serial capture helpers
+firmware/.serial.log
+firmware/.build.log

@@ -28,8 +28,10 @@ void job_queue_init(void)
     s_head = 0;
     s_count = 0;
     s_mux = xSemaphoreCreateMutex();
+    /* xSemaphoreCreateCounting(max_count, initial_count): the first argument is
+     * the maximum, which must be non-zero. */
     s_space = xSemaphoreCreateCounting(s_cap, s_cap);
-    s_data = xSemaphoreCreateCounting(0, s_cap);
+    s_data = xSemaphoreCreateCounting(s_cap, 0);
     ESP_LOGI(TAG, "queue ready: %u KB", (unsigned)(s_cap / 1024));
 }
 

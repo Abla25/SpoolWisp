@@ -1,5 +1,6 @@
 #include "wifi_portal.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
@@ -284,8 +285,16 @@ static void dns_task(void *arg)
 void wifi_portal_run(void)
 {
     ESP_LOGI(TAG, "starting provisioning portal");
-    ESP_ERROR_CHECK(esp_wifi_stop());
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+
+    /* Reached from two paths: first boot (WiFi driver not initialised yet) and
+     * failed STA connect (driver initialised and running). Sequence is valid
+     * for both, and portal mode no longer blocks app_main, so the print/USB/IP
+     * servers also come up while the portal is active. */
+    ESP_ERROR_CHECK(esp_netif_init());
+    esp_err_t err = esp_event_loop_create_default();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_ERROR_CHECK(err);
+    }
 
     char ap_ssid[33];
     uint8_t mac[6];
@@ -293,9 +302,26 @@ void wifi_portal_run(void)
     snprintf(ap_ssid, sizeof(ap_ssid), "%s-%02X%02X%02X", CONFIG_APP_PORTAL_AP_PREFIX,
              mac[3], mac[4], mac[5]);
 
-    esp_netif_create_default_wifi_ap();
-    wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
+    esp_netif_t *ap_netif = esp_netif_create_default_wifi_ap();
+    if (ap_netif == NULL) {
+        ESP_LOGE(TAG, "cannot create AP network interface");
+        return;
+    }
+
+    wifi_mode_t mode;
+    if (esp_wifi_get_mode(&mode) == ESP_ERR_WIFI_NOT_INIT) {
+        wifi_init_config_t init_cfg = WIFI_INIT_CONFIG_DEFAULT();
+        ESP_ERROR_CHECK(esp_wifi_init(&init_cfg));
+    } else {
+        /* already initialised: stop the previous (STA) mode first. Stopping
+         * an initialised-but-not-started driver just returns an error we can
+         * ignore, which is the case on the failed-connect path. */
+        err = esp_wifi_stop();
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "esp_wifi_stop: %s", esp_err_to_name(err));
+        }
+    }
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
 
     /* device-specific WPA2 password so a random passer-by cannot reconfigure
      * the device: "cfg" + last 3 MAC bytes (9 chars, printed on serial only) */
@@ -319,5 +345,4 @@ void wifi_portal_run(void)
              ap_ssid, ap_pass, PORTAL_IP);
     xTaskCreate(http_task, "portal_http", 8192, NULL, 5, NULL);
     xTaskCreate(dns_task, "portal_dns", 3072, NULL, 3, NULL);
-    vTaskSuspend(NULL);
 }

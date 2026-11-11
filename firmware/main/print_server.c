@@ -2,6 +2,7 @@
 #include "job_queue.h"
 #include "usb_printer.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "freertos/FreeRTOS.h"
