@@ -81,26 +81,17 @@ void mdns_adv_start(void)
         ESP_LOGE(TAG, "mdns raw service add failed: %s", esp_err_to_name(err));
     }
 
-    static mdns_txt_item_t lpd_txt[] = {
-        { "txtvers", "1" },
-        { "qtotal", "1" },
-        { "rp", "lp" },
-        { "ty", "SpoolWisp USB print server" },
-        { "note", "USB printer over ESP32-S3" },
-    };
-    err = mdns_service_add(instance, SVC_LPD, PROTO, CONFIG_APP_LPD_PORT,
-                           lpd_txt, sizeof(lpd_txt) / sizeof(lpd_txt[0]));
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "mdns LPD service add failed: %s", esp_err_to_name(err));
-    }
+    /* Do NOT advertise _printer._tcp (LPD): macOS creates a dnssd LPD queue
+     * from it that fails to connect, while the _pdl-datastream entry below is
+     * auto-added as a working socket://host:9100 queue. LPD stays listening on
+     * port 515 for manual/Linux use. */
 
     strlcpy(s_instance, instance, sizeof(s_instance));
     s_started = true;
     if (s_pending_name[0] != '\0') {
         update_printer_txt(s_pending_mfg, s_pending_mdl);
     }
-    ESP_LOGI(TAG, "Bonjour: spoolwisp.local | \"%s\" raw:%d lpd:%d",
-             s_instance, CONFIG_APP_RAW_PORT, CONFIG_APP_LPD_PORT);
+    ESP_LOGI(TAG, "Bonjour: spoolwisp.local | \"%s\" socket:%d", s_instance, CONFIG_APP_RAW_PORT);
 }
 
 void mdns_adv_set_printer(const char *manufacturer, const char *model)
