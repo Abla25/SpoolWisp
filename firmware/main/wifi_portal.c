@@ -81,11 +81,19 @@ static void form_get(const char *body, const char *key, char *out, size_t out_ca
 
 static void scan_networks(wifi_ap_record_t *aps, uint16_t *count)
 {
+    *count = 0;
     wifi_scan_config_t sc = {0};
-    esp_wifi_scan_start(&sc, true);
+    esp_err_t err = esp_wifi_scan_start(&sc, true);
+    if (err != ESP_OK) {
+        /* scanning needs the station interface; the portal keeps AP+STA
+         * enabled so this is only reached if the driver is really stuck */
+        ESP_LOGW(TAG, "WiFi scan failed: %s", esp_err_to_name(err));
+        return;
+    }
     uint16_t num = MAX_APS;
-    esp_wifi_scan_get_ap_records(&num, aps);
-    *count = num;
+    if (esp_wifi_scan_get_ap_records(&num, aps) == ESP_OK) {
+        *count = num;
+    }
 }
 
 static void send_response(int conn, int code, const char *ctype, const char *body, size_t body_len)
@@ -307,6 +315,13 @@ void wifi_portal_run(void)
         ESP_LOGE(TAG, "cannot create AP network interface");
         return;
     }
+    /* AP-only mode cannot scan for networks (the scan API needs a station
+     * interface), which is why the portal used to show an empty list. Keep an
+     * STA netif and run AP+STA while provisioning; nothing connects until the
+     * saved credentials are used on the next boot. */
+    if (esp_netif_get_handle_from_ifkey("WIFI_STA_DEF") == NULL) {
+        esp_netif_create_default_wifi_sta();
+    }
 
     wifi_mode_t mode;
     if (esp_wifi_get_mode(&mode) == ESP_ERR_WIFI_NOT_INIT) {
@@ -321,7 +336,7 @@ void wifi_portal_run(void)
             ESP_LOGW(TAG, "esp_wifi_stop: %s", esp_err_to_name(err));
         }
     }
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
 
     /* device-specific WPA2 password so a random passer-by cannot reconfigure
      * the device: "cfg" + last 3 MAC bytes (9 chars, printed on serial only) */
@@ -340,6 +355,13 @@ void wifi_portal_run(void)
     strlcpy((char *)ap_cfg.ap.password, ap_pass, sizeof(ap_cfg.ap.password));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    /* the STA side only exists so the portal can scan; do not let it keep
+     * retrying the old (unreachable) network while the portal is active */
+    err = esp_wifi_disconnect();
+    if (err != ESP_OK) {
+        ESP_LOGD(TAG, "esp_wifi_disconnect: %s", esp_err_to_name(err));
+    }
 
     ESP_LOGI(TAG, "connect to AP \"%s\" (password: %s) and open http://%s",
              ap_ssid, ap_pass, PORTAL_IP);

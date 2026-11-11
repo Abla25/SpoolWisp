@@ -163,7 +163,9 @@ static void lpd_receive_job(int conn)
             char *sp = strchr(line, ' ');
             long size = sp ? atol(sp + 1) : 0;
             lpd_ack(conn);
-            if (sub == 0x03) {
+            if (sub == 0x02) {
+                /* RFC 1179: 0x02 is the control file (job metadata), the
+                 * printable payload is the 0x03 data file. Discard control. */
                 uint8_t tmp[512];
                 long left = size;
                 while (left > 0) {
@@ -173,6 +175,7 @@ static void lpd_receive_job(int conn)
                     }
                     left -= chunk;
                 }
+                ESP_LOGI(TAG, "LPD control file (%ld bytes) discarded", size);
             } else {
                 static uint8_t buf[RECV_BUF_SIZE];
                 long left = size;
@@ -184,6 +187,7 @@ static void lpd_receive_job(int conn)
                     job_queue_write(buf, chunk);
                     left -= chunk;
                 }
+                ESP_LOGI(TAG, "LPD data file (%ld bytes) queued", size);
             }
             lpd_ack(conn);
         } else if (sub == 0x04 || sub == 0x05) {
